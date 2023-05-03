@@ -214,6 +214,11 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	return
 }
 
+// TUN Network Interface
+func (c *Control) IFace() *Interface {
+	return c.f
+}
+
 func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 
 	chi := ControlHostInfo{
