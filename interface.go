@@ -423,3 +423,8 @@ func (f *Interface) Close() error {
 	// Release the tun device
 	return f.inside.Close()
 }
+
+// TUN Overlay Device
+func (f *Interface) Device() overlay.Device {
+  return f.inside
+}
