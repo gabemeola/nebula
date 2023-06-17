@@ -52,7 +52,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 
 	lh := newTestLighthouse()
 	ifce := &Interface{
-		hostMap:          hostMap,
+		HostMap:          hostMap,
 		inside:           &test.NoopTun{},
 		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
@@ -131,7 +131,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 
 	lh := newTestLighthouse()
 	ifce := &Interface{
-		hostMap:          hostMap,
+		HostMap:          hostMap,
 		inside:           &test.NoopTun{},
 		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
@@ -250,7 +250,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 
 	lh := newTestLighthouse()
 	ifce := &Interface{
-		hostMap:           hostMap,
+		HostMap:           hostMap,
 		inside:            &test.NoopTun{},
 		outside:           &udp.NoopConn{},
 		firewall:          &Firewall{},

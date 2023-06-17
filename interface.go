@@ -51,7 +51,7 @@ type InterfaceConfig struct {
 }
 
 type Interface struct {
-	hostMap            *HostMap
+	HostMap            *HostMap
 	outside            udp.Conn
 	inside             overlay.Device
 	certState          atomic.Pointer[CertState]
@@ -153,7 +153,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 
 	myVpnIp := iputil.Ip2VpnIp(c.certState.certificate.Details.Ips[0].IP)
 	ifce := &Interface{
-		hostMap:            c.HostMap,
+		HostMap:            c.HostMap,
 		outside:            c.Outside,
 		inside:             c.Inside,
 		cipher:             c.Cipher,

@@ -57,7 +57,7 @@ func newConnectionManager(ctx context.Context, l *logrus.Logger, intf *Interface
 	}
 
 	nc := &connectionManager{
-		hostMap:                 intf.hostMap,
+		hostMap:                 intf.HostMap,
 		in:                      make(map[uint32]struct{}),
 		inLock:                  &sync.RWMutex{},
 		out:                     make(map[uint32]struct{}),

@@ -113,7 +113,7 @@ func (c *Control) ListHostmapHosts(pendingMap bool) []ControlHostInfo {
 	if pendingMap {
 		return listHostMapHosts(c.f.handshakeManager)
 	} else {
-		return listHostMapHosts(c.f.hostMap)
+		return listHostMapHosts(c.f.HostMap)
 	}
 }
 
@@ -122,7 +122,7 @@ func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 	if pendingMap {
 		return listHostMapIndexes(c.f.handshakeManager)
 	} else {
-		return listHostMapIndexes(c.f.hostMap)
+		return listHostMapIndexes(c.f.HostMap)
 	}
 }
 
@@ -132,7 +132,7 @@ func (c *Control) GetHostInfoByVpnIp(vpnIp iputil.VpnIp, pending bool) *ControlH
 	if pending {
 		hl = c.f.handshakeManager
 	} else {
-		hl = c.f.hostMap
+		hl = c.f.HostMap
 	}
 
 	h := hl.QueryVpnIp(vpnIp)
@@ -140,25 +140,25 @@ func (c *Control) GetHostInfoByVpnIp(vpnIp iputil.VpnIp, pending bool) *ControlH
 		return nil
 	}
 
-	ch := copyHostInfo(h, c.f.hostMap.preferredRanges)
+	ch := copyHostInfo(h, c.f.HostMap.preferredRanges)
 	return &ch
 }
 
 // SetRemoteForTunnel forces a tunnel to use a specific remote
 func (c *Control) SetRemoteForTunnel(vpnIp iputil.VpnIp, addr udp.Addr) *ControlHostInfo {
-	hostInfo := c.f.hostMap.QueryVpnIp(vpnIp)
+	hostInfo := c.f.HostMap.QueryVpnIp(vpnIp)
 	if hostInfo == nil {
 		return nil
 	}
 
 	hostInfo.SetRemote(addr.Copy())
-	ch := copyHostInfo(hostInfo, c.f.hostMap.preferredRanges)
+	ch := copyHostInfo(hostInfo, c.f.HostMap.preferredRanges)
 	return &ch
 }
 
 // CloseTunnel closes a fully established tunnel. If localOnly is false it will notify the remote end as well.
 func (c *Control) CloseTunnel(vpnIp iputil.VpnIp, localOnly bool) bool {
-	hostInfo := c.f.hostMap.QueryVpnIp(vpnIp)
+	hostInfo := c.f.HostMap.QueryVpnIp(vpnIp)
 	if hostInfo == nil {
 		return false
 	}
@@ -202,21 +202,21 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	// Learn which hosts are being used as relays, so we can shut them down last.
 	relayingHosts := map[iputil.VpnIp]*HostInfo{}
 	// Grab the hostMap lock to access the Relays map
-	c.f.hostMap.Lock()
-	for _, relayingHost := range c.f.hostMap.Relays {
+	c.f.HostMap.Lock()
+	for _, relayingHost := range c.f.HostMap.Relays {
 		relayingHosts[relayingHost.vpnIp] = relayingHost
 	}
-	c.f.hostMap.Unlock()
+	c.f.HostMap.Unlock()
 
 	hostInfos := []*HostInfo{}
 	// Grab the hostMap lock to access the Hosts map
-	c.f.hostMap.Lock()
-	for _, relayHost := range c.f.hostMap.Indexes {
+	c.f.HostMap.Lock()
+	for _, relayHost := range c.f.HostMap.Indexes {
 		if _, ok := relayingHosts[relayHost.vpnIp]; !ok {
 			hostInfos = append(hostInfos, relayHost)
 		}
 	}
-	c.f.hostMap.Unlock()
+	c.f.HostMap.Unlock()
 
 	for _, h := range hostInfos {
 		shutdown(h)

@@ -84,7 +84,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 
 	c := Control{
 		f: &Interface{
-			hostMap: hm,
+			HostMap: hm,
 		},
 		l: logrus.New(),
 	}

@@ -64,9 +64,9 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via *ViaSender, out []byt
 	var hostinfo *HostInfo
 	// verify if we've seen this index before, otherwise respond to the handshake initiation
 	if h.Type == header.Message && h.Subtype == header.MessageRelay {
-		hostinfo = f.hostMap.QueryRelayIndex(h.RemoteIndex)
+		hostinfo = f.HostMap.QueryRelayIndex(h.RemoteIndex)
 	} else {
-		hostinfo = f.hostMap.QueryIndex(h.RemoteIndex)
+		hostinfo = f.HostMap.QueryIndex(h.RemoteIndex)
 	}
 
 	var ci *ConnectionState
@@ -122,7 +122,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via *ViaSender, out []byt
 				return
 			case ForwardingType:
 				// Find the target HostInfo relay object
-				targetHI, targetRelay, err := f.hostMap.QueryVpnIpRelayFor(hostinfo.vpnIp, relay.PeerIp)
+				targetHI, targetRelay, err := f.HostMap.QueryVpnIpRelayFor(hostinfo.vpnIp, relay.PeerIp)
 				if err != nil {
 					hostinfo.logger(f.l).WithField("relayTo", relay.PeerIp).WithError(err).Info("Failed to find target host info by ip")
 					return
@@ -252,7 +252,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via *ViaSender, out []byt
 
 // closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
 func (f *Interface) closeTunnel(hostInfo *HostInfo) {
-	final := f.hostMap.DeleteHostInfo(hostInfo)
+	final := f.HostMap.DeleteHostInfo(hostInfo)
 	if final {
 		// We no longer have any tunnels with this vpn ip, clear learned lighthouse state to lower memory usage
 		f.lightHouse.DeleteVpnIp(hostInfo.vpnIp)
@@ -449,7 +449,7 @@ func (f *Interface) handleRecvError(addr *udp.Addr, h *header.H) {
 			Debug("Recv error received")
 	}
 
-	hostinfo := f.hostMap.QueryReverseIndex(h.RemoteIndex)
+	hostinfo := f.HostMap.QueryReverseIndex(h.RemoteIndex)
 	if hostinfo == nil {
 		f.l.WithField("remoteIndex", h.RemoteIndex).Debugln("Did not find remote index in main hostmap")
 		return
