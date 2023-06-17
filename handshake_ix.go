@@ -217,7 +217,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 			hostinfo.Unlock()
 			existing.Lock()
 			// Update remote if preferred
-			if existing.SetRemoteIfPreferred(f.hostMap, addr) {
+			if existing.SetRemoteIfPreferred(f.HostMap, addr) {
 				// Send a test packet to ensure the other side has also switched to
 				// the preferred remote
 				f.SendMessageToVpnIp(header.Test, header.TestRequest, vpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
@@ -359,7 +359,7 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hostinfo *H
 			Info("Handshake is already complete")
 
 		// Update remote if preferred
-		if hostinfo.SetRemoteIfPreferred(f.hostMap, addr) {
+		if hostinfo.SetRemoteIfPreferred(f.HostMap, addr) {
 			// Send a test packet to ensure the other side has also switched to
 			// the preferred remote
 			f.SendMessageToVpnIp(header.Test, header.TestRequest, hostinfo.vpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
@@ -437,7 +437,7 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hostinfo *H
 		hostinfo.remotes = f.lightHouse.QueryCache(vpnIp)
 
 		f.l.WithField("blockedUdpAddrs", newHostInfo.remotes.CopyBlockedRemotes()).WithField("vpnIp", vpnIp).
-			WithField("remotes", newHostInfo.remotes.CopyAddrs(f.hostMap.preferredRanges)).
+			WithField("remotes", newHostInfo.remotes.CopyAddrs(f.HostMap.preferredRanges)).
 			Info("Blocked addresses for handshakes")
 
 		// Swap the packet store to benefit the original intended recipient

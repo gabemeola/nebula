@@ -121,7 +121,7 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 			return nil
 		}
 	}
-	hostinfo, err := f.hostMap.PromoteBestQueryVpnIp(vpnIp, f)
+	hostinfo, err := f.HostMap.PromoteBestQueryVpnIp(vpnIp, f)
 
 	//if err != nil || hostinfo.ConnectionState == nil {
 	if err != nil {
@@ -372,7 +372,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	} else {
 		// Try to send via a relay
 		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
-			relayHostInfo, err := f.hostMap.QueryVpnIp(relayIP)
+			relayHostInfo, err := f.HostMap.QueryVpnIp(relayIP)
 			if err != nil {
 				hostinfo.logger(f.l).WithField("relay", relayIP).WithError(err).Info("sendNoMetrics failed to find HostInfo")
 				continue

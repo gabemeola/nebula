@@ -198,7 +198,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 				}
 			}
 		} else {
-			_, err := AddRelay(rm.l, h, f.hostMap, from, &m.InitiatorRelayIndex, TerminalType, Established)
+			_, err := AddRelay(rm.l, h, f.HostMap, from, &m.InitiatorRelayIndex, TerminalType, Established)
 			if err != nil {
 				logMsg.WithError(err).Error("Failed to add relay")
 				return
@@ -259,7 +259,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			}
 		} else {
 			// Allocate an index in the hostMap for this relay peer
-			index, err = AddRelay(rm.l, peer, f.hostMap, from, nil, ForwardingType, Requested)
+			index, err = AddRelay(rm.l, peer, f.HostMap, from, nil, ForwardingType, Requested)
 			if err != nil {
 				return
 			}
@@ -296,7 +296,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			if targetRelay != nil && targetRelay.State == Established {
 				state = Established
 			}
-			_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, ForwardingType, state)
+			_, err := AddRelay(rm.l, h, f.HostMap, target, &m.InitiatorRelayIndex, ForwardingType, state)
 			if err != nil {
 				logMsg.
 					WithError(err).Error("relayManager Failed to allocate a local index for relay")
