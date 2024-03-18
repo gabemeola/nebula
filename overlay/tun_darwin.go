@@ -70,6 +70,7 @@ type ifreqMTU struct {
 }
 
 func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []Route, _ int, _ bool, _ bool) (*tun, error) {
+	fmt.Printf("routes: %+v\n", routes)
 	routeTree, err := makeRouteTree(l, routes, false)
 	if err != nil {
 		return nil, err
@@ -201,10 +202,27 @@ func (t *tun) Activate() error {
 		},
 	}
 
+	fmt.Printf("Setting device ip: %+v\n", ifra)
 	// Set the device ip address
 	if err = ioctl(fd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra))); err != nil {
 		return fmt.Errorf("failed to set tun address: %s", err)
 	}
+
+	// TODO: Setting two IPs doesn't work, it only uses the last one.
+	// Might need 1 IP per interface.
+	// ifra = ifreqAddr{
+	// 	Name: devName,
+	// 	Addr: unix.RawSockaddrInet4{
+	// 		Family: unix.AF_INET,
+	// 		Addr:   [4]byte{1, 1, 1, 1},
+	// 	},
+	// }
+
+	// fmt.Printf("Setting device ip: %+v\n", ifra)
+	// // Set the device ip address
+	// if err = ioctl(fd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra))); err != nil {
+	// 	return fmt.Errorf("failed to set tun address: %s", err)
+	// }
 
 	// Set the device network
 	ifra.Addr.Addr = mask
@@ -271,6 +289,36 @@ func (t *tun) Activate() error {
 		return err
 	}
 
+	loLinkAddr, err := getLinkAddr("lo0")
+	fmt.Printf("got en0 link: %+v\n", loLinkAddr)
+	if err != nil {
+		return err
+	}
+	if loLinkAddr == nil {
+		return fmt.Errorf("unable to discover link_addr for loopback interface")
+	}
+	// THIS DOES WORK
+	// sudo ifconfig lo0 alias 10.0.0.1
+	err = addAliasRoute(
+		routeSock,
+		&netroute.Inet4Addr{
+			IP: [4]byte{10, 0, 0, 1},
+		},
+		// loLinkAddr,
+		&netroute.LinkAddr{
+			Index: 1,
+			Name:  "lo0",
+			Addr:  []byte{10, 0, 0, 1},
+			// Addr: []byte("localhost"),
+		},
+	)
+	if err != nil {
+		if errors.Is(err, unix.EEXIST) {
+			err = fmt.Errorf("unable to add alias tun route: %s", err)
+		}
+		return err
+	}
+
 	// Run the interface
 	ifrf.Flags = ifrf.Flags | unix.IFF_UP | unix.IFF_RUNNING
 	if err = ioctl(fd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
@@ -286,6 +334,7 @@ func (t *tun) Activate() error {
 
 		copy(routeAddr.IP[:], r.Cidr.IP.To4())
 		copy(maskAddr.IP[:], net.IP(r.Cidr.Mask).To4())
+		fmt.Printf("Adding Route: sock: %d, addr: %+v, mask: %+v, linkAddr: %s\n", routeSock, routeAddr, maskAddr, linkAddr.Name)
 
 		err = addRoute(routeSock, routeAddr, maskAddr, linkAddr)
 		if err != nil {
@@ -360,6 +409,103 @@ func addRoute(sock int, addr, mask *netroute.Inet4Addr, link *netroute.LinkAddr)
 	_, err = unix.Write(sock, data[:])
 	if err != nil {
 		return fmt.Errorf("failed to write route.RouteMessage to socket: %w", err)
+	}
+
+	return nil
+}
+
+func addAliasRoute(sock int, addr *netroute.Inet4Addr, link *netroute.LinkAddr) error {
+	// TODO: Also need the sys call for creating a new ip on the loopback
+	// This only sets up the routing table but the loopback doesn't accept the traffic.
+  // r2 := netroute.InterfaceAddrMessage{
+	// 	Version: unix.RTM_VERSION,
+	// 	Type:    unix.RTM_NEWADDR,
+	// 	// Flags: unix.RTF_UP | unix.RTF_HOST | unix.RTF_LOCAL,
+	// 	// Flags:   unix.RTF_UP,
+	// 	Addrs: []netroute.Addr{
+	// 		unix.RTAX_NETMASK: &netroute.Inet4Addr{
+	// 			IP: [4]byte{0, 0, 0, 0},
+	// 		},
+	// 		unix.RTAX_IFP: &netroute.LinkAddr{
+	// 			Index: 0,
+	// 			Name:  "lo0",
+	// 		},
+	// 		unix.RTAX_IFA: &netroute.Inet4Addr{
+	// 			IP: [4]byte{10, 0, 0, 1},
+	// 		},
+	// 		// unix.RTAX_IFP: link,
+	// 		// unix.RTAX_IFA: addr,
+	// 		// unix.RTAX_IFP: link,
+	// 		// unix.RTA_IFA: addr,
+	// 		// unix.RTAX_IFP: "lo0",
+	// 		// unix.RTAX_NETMASK: mask,
+	// 	},
+	// }
+  // fmt.Printf("DATA2: %+v\n", r2)
+
+  return nil;
+	r := netroute.RouteMessage{
+		Version: unix.RTM_VERSION,
+		Type:    unix.RTM_NEWADDR,
+		// Flags: unix.RTF_UP | unix.RTF_HOST | unix.RTF_LOCAL,
+		Seq: 1,
+    // ID: 345,
+		Addrs: []netroute.Addr{
+			unix.RTAX_NETMASK: &netroute.Inet4Addr{
+				// IP: [4]byte{0, 0, 0, 0},
+			},
+			unix.RTAX_IFP: &netroute.LinkAddr{
+				Index: 0,
+				Name:  "lo0",
+			},
+			unix.RTAX_IFA: &netroute.Inet4Addr{
+				IP: [4]byte{10, 0, 0, 1},
+			},
+      unix.RTAX_BRD: &netroute.Inet4Addr{
+				IP: [4]byte{10, 0, 0, 1},
+			},
+			// unix.RTAX_IFP: link,
+			// unix.RTAX_IFA: addr,
+			// unix.RTAX_IFP: link,
+			// unix.RTA_IFA: addr,
+			// unix.RTAX_IFP: "lo0",
+			// unix.RTAX_NETMASK: mask,
+		},
+	}
+
+	data, err := r.Marshal()
+	fmt.Printf("DATA: %+v\n", r)
+	if err != nil {
+		return fmt.Errorf("failed to create route.RouteMessage: %w", err)
+	}
+	_, err = unix.Write(sock, data[:])
+	if err != nil {
+		return fmt.Errorf("failed to write RTM_NEWADDR route.RouteMessage to socket: %w", err)
+	}
+
+	r = netroute.RouteMessage{
+		Version: unix.RTM_VERSION,
+		Type:    unix.RTM_ADD,
+		// TODO: These extra flag may or may not be needed.
+		// This is just what ifconfig alias does
+		Flags: unix.RTF_UP | unix.RTF_HOST | unix.RTF_LOCAL,
+		// Flags:   unix.RTF_UP,
+		Seq: 1,
+		Addrs: []netroute.Addr{
+			unix.RTAX_DST:     addr,
+			unix.RTAX_GATEWAY: link,
+			// unix.RTAX_IFP: "lo0",
+			// unix.RTAX_NETMASK: mask,
+		},
+	}
+
+	data, err = r.Marshal()
+	if err != nil {
+		return fmt.Errorf("failed to create route.RouteMessage: %w", err)
+	}
+	_, err = unix.Write(sock, data[:])
+	if err != nil {
+		return fmt.Errorf("failed to write RTM_ADD route.RouteMessage to socket: %w", err)
 	}
 
 	return nil
