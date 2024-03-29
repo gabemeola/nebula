@@ -74,7 +74,24 @@ type LightHouse struct {
 	metrics           *MessageMetrics
 	metricHolepunchTx metrics.Counter
 	l                 *logrus.Logger
+
+	// OnHostQueryMiss is invoked from handleHostQuery when no entry exists
+	// in addrMap for the queried vpnIp. When set, the hook is responsible
+	// for the *entire* response — the lighthouse will not send any reply
+	// or punch notification on its own.
+	//
+	// Implementations typically read entries from other LightHouse instances
+	// (see GetAddrMapEntry) and either reply via w directly or build a
+	// HostQueryReply NebulaMeta and send it via w.SendMessageToVpnIp.
+	//
+	// Vanilla behavior (silently drop unknown queries) is preserved when
+	// this field is nil.
+	OnHostQueryMiss HostQueryMissFunc
 }
+
+// HostQueryMissFunc is the extension point for handling HostQuery messages
+// whose vpnIp isn't in the local addrMap. See LightHouse.OnHostQueryMiss.
+type HostQueryMissFunc func(queryVpnIp, requesterVpnIp netip.Addr, w EncWriter)
 
 // NewLightHouseFromConfig will build a Lighthouse struct from the values provided in the config object
 // addrMap should be nil unless this is during a config reload
@@ -616,6 +633,38 @@ func (lh *LightHouse) unlockedGetRemoteList(vpnIp netip.Addr) *RemoteList {
 	return am
 }
 
+// GetAddrMapEntry returns the RemoteList for vpnIp from this lighthouse's
+// local addrMap, or nil if no entry exists. The returned list is the live
+// pointer — callers must respect its embedded RWMutex when reading or
+// updating its contents.
+func (lh *LightHouse) GetAddrMapEntry(vpnIp netip.Addr) *RemoteList {
+	lh.RLock()
+	defer lh.RUnlock()
+	return lh.addrMap[vpnIp]
+}
+
+// SetAddrMapEntry stores rl at addrMap[vpnIp]. If a concurrent caller already
+// installed a list for vpnIp the existing list is preserved and returned,
+// matching the unlockedGetRemoteList check-then-set pattern used internally.
+// The returned list is the one actually installed.
+func (lh *LightHouse) SetAddrMapEntry(vpnIp netip.Addr, rl *RemoteList) *RemoteList {
+	lh.Lock()
+	defer lh.Unlock()
+	if existing, ok := lh.addrMap[vpnIp]; ok {
+		return existing
+	}
+	lh.addrMap[vpnIp] = rl
+	return rl
+}
+
+// NewRemoteListFor returns a fresh, empty RemoteList whose shouldAdd closure
+// is bound to this lighthouse's allow-list and myVpnNet filters. Useful for
+// callers that want to build a RemoteList from scratch and install it via
+// SetAddrMapEntry without dipping into lh-internal helpers.
+func (lh *LightHouse) NewRemoteListFor(vpnIp netip.Addr) *RemoteList {
+	return NewRemoteList(func(a netip.Addr) bool { return lh.shouldAdd(vpnIp, a) })
+}
+
 func (lh *LightHouse) shouldAdd(vpnIp netip.Addr, to netip.Addr) bool {
 	allow := lh.GetRemoteAllowList().Allow(vpnIp, to)
 	if lh.l.Level >= logrus.TraceLevel {
@@ -967,6 +1016,12 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp netip.Addr, a
 	})
 
 	if !found {
+		// Hand off the miss to the configured handler if any. The handler
+		// owns the whole response (reply, optional punch) so this lighthouse
+		// has no further work to do.
+		if lhh.lh.OnHostQueryMiss != nil {
+			lhh.lh.OnHostQueryMiss(queryVpnIp, vpnIp, w)
+		}
 		return
 	}
 

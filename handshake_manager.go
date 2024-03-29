@@ -64,6 +64,11 @@ type HandshakeManager struct {
 	trigger chan netip.Addr
 }
 
+// Extensions
+func (s *HandshakeManager) LightHouse() *LightHouse {
+	return s.lightHouse
+}
+
 type HandshakeHostInfo struct {
 	sync.Mutex
 

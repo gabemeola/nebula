@@ -19,6 +19,11 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
+	// Extension: Handle IP Alias Packets
+	if f.IPAlias != nil && f.IPAlias.OnPacket != nil && fwPacket.RemoteIP == f.IPAlias.Ip {
+		f.IPAlias.OnPacket(packet, f.readers[q])
+		return
+	}
 	// Ignore local broadcast packets
 	if f.dropLocalBroadcast && fwPacket.RemoteIP == f.myBroadcastAddr {
 		return

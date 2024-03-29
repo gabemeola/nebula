@@ -51,6 +51,12 @@ type InterfaceConfig struct {
 	l                     *logrus.Logger
 }
 
+// Extension: IP Alias routing
+type IPAlias struct {
+	Ip       netip.Addr
+	OnPacket func(packet []byte, writer io.Writer)
+}
+
 type Interface struct {
 	hostMap            *HostMap
 	outside            udp.Conn
@@ -92,6 +98,21 @@ type Interface struct {
 	cachedPacketMetrics *cachedPacketMetrics
 
 	l *logrus.Logger
+
+	// Extensions
+	IPAlias *IPAlias
+}
+
+// Extensions
+func (s *Interface) HandshakeManager() *HandshakeManager {
+	return s.handshakeManager
+}
+
+// LightHouse returns the lighthouse this interface drives. Used by priv-harbor
+// to wire its federation hooks (OnHostQueryMiss) and to read/write addrMap
+// state across cohorts.
+func (s *Interface) LightHouse() *LightHouse {
+	return s.lightHouse
 }
 
 type EncWriter interface {
@@ -301,7 +322,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	for {
 		n, err := reader.Read(packet)
 		if err != nil {
-			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
+			if (errors.Is(err, os.ErrClosed) || errors.Is(err, io.EOF)) && f.closed.Load() {
 				return
 			}
 
