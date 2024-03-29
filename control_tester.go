@@ -20,7 +20,7 @@ import (
 func (c *Control) WaitForType(msgType header.MessageType, subType header.MessageSubType, pipeTo *Control) {
 	h := &header.H{}
 	for {
-		p := c.f.outside.(*udp.TesterConn).Get(true)
+		p := c.F.outside.(*udp.TesterConn).Get(true)
 		if err := h.Parse(p.Data); err != nil {
 			panic(err)
 		}
@@ -36,7 +36,7 @@ func (c *Control) WaitForType(msgType header.MessageType, subType header.Message
 func (c *Control) WaitForTypeByIndex(toIndex uint32, msgType header.MessageType, subType header.MessageSubType, pipeTo *Control) {
 	h := &header.H{}
 	for {
-		p := c.f.outside.(*udp.TesterConn).Get(true)
+		p := c.F.outside.(*udp.TesterConn).Get(true)
 		if err := h.Parse(p.Data); err != nil {
 			panic(err)
 		}
@@ -50,11 +50,11 @@ func (c *Control) WaitForTypeByIndex(toIndex uint32, msgType header.MessageType,
 // InjectLightHouseAddr will push toAddr into the local lighthouse cache for the vpnIp
 // This is necessary if you did not configure static hosts or are not running a lighthouse
 func (c *Control) InjectLightHouseAddr(vpnIp netip.Addr, toAddr netip.AddrPort) {
-	c.f.lightHouse.Lock()
-	remoteList := c.f.lightHouse.unlockedGetRemoteList(vpnIp)
+	c.F.lightHouse.Lock()
+	remoteList := c.F.lightHouse.unlockedGetRemoteList(vpnIp)
 	remoteList.Lock()
 	defer remoteList.Unlock()
-	c.f.lightHouse.Unlock()
+	c.F.lightHouse.Unlock()
 
 	if toAddr.Addr().Is4() {
 		remoteList.unlockedPrependV4(vpnIp, NewIp4AndPortFromNetIP(toAddr.Addr(), toAddr.Port()))
@@ -66,36 +66,36 @@ func (c *Control) InjectLightHouseAddr(vpnIp netip.Addr, toAddr netip.AddrPort) 
 // InjectRelays will push relayVpnIps into the local lighthouse cache for the vpnIp
 // This is necessary to inform an initiator of possible relays for communicating with a responder
 func (c *Control) InjectRelays(vpnIp netip.Addr, relayVpnIps []netip.Addr) {
-	c.f.lightHouse.Lock()
-	remoteList := c.f.lightHouse.unlockedGetRemoteList(vpnIp)
+	c.F.lightHouse.Lock()
+	remoteList := c.F.lightHouse.unlockedGetRemoteList(vpnIp)
 	remoteList.Lock()
 	defer remoteList.Unlock()
-	c.f.lightHouse.Unlock()
+	c.F.lightHouse.Unlock()
 
 	remoteList.unlockedSetRelay(vpnIp, vpnIp, relayVpnIps)
 }
 
 // GetFromTun will pull a packet off the tun side of nebula
 func (c *Control) GetFromTun(block bool) []byte {
-	return c.f.inside.(*overlay.TestTun).Get(block)
+	return c.F.inside.(*overlay.TestTun).Get(block)
 }
 
 // GetFromUDP will pull a udp packet off the udp side of nebula
 func (c *Control) GetFromUDP(block bool) *udp.Packet {
-	return c.f.outside.(*udp.TesterConn).Get(block)
+	return c.F.outside.(*udp.TesterConn).Get(block)
 }
 
 func (c *Control) GetUDPTxChan() <-chan *udp.Packet {
-	return c.f.outside.(*udp.TesterConn).TxPackets
+	return c.F.outside.(*udp.TesterConn).TxPackets
 }
 
 func (c *Control) GetTunTxChan() <-chan []byte {
-	return c.f.inside.(*overlay.TestTun).TxPackets
+	return c.F.inside.(*overlay.TestTun).TxPackets
 }
 
 // InjectUDPPacket will inject a packet into the udp side of nebula
 func (c *Control) InjectUDPPacket(p *udp.Packet) {
-	c.f.outside.(*udp.TesterConn).Send(p)
+	c.F.outside.(*udp.TesterConn).Send(p)
 }
 
 // InjectTunUDPPacket puts a udp packet on the tun interface. Using UDP here because it's a simpler protocol
@@ -105,7 +105,7 @@ func (c *Control) InjectTunUDPPacket(toIp netip.Addr, toPort uint16, fromPort ui
 		Version:  4,
 		TTL:      64,
 		Protocol: layers.IPProtocolUDP,
-		SrcIP:    c.f.inside.Cidr().Addr().Unmap().AsSlice(),
+		SrcIP:    c.F.inside.Cidr().Addr().Unmap().AsSlice(),
 		DstIP:    toIp.Unmap().AsSlice(),
 	}
 
@@ -128,35 +128,35 @@ func (c *Control) InjectTunUDPPacket(toIp netip.Addr, toPort uint16, fromPort ui
 		panic(err)
 	}
 
-	c.f.inside.(*overlay.TestTun).Send(buffer.Bytes())
+	c.F.inside.(*overlay.TestTun).Send(buffer.Bytes())
 }
 
 func (c *Control) GetVpnIp() netip.Addr {
-	return c.f.myVpnNet.Addr()
+	return c.F.myVpnNet.Addr()
 }
 
 func (c *Control) GetUDPAddr() netip.AddrPort {
-	return c.f.outside.(*udp.TesterConn).Addr
+	return c.F.outside.(*udp.TesterConn).Addr
 }
 
 func (c *Control) KillPendingTunnel(vpnIp netip.Addr) bool {
-	hostinfo := c.f.handshakeManager.QueryVpnIp(vpnIp)
+	hostinfo := c.F.handshakeManager.QueryVpnIp(vpnIp)
 	if hostinfo == nil {
 		return false
 	}
 
-	c.f.handshakeManager.DeleteHostInfo(hostinfo)
+	c.F.handshakeManager.DeleteHostInfo(hostinfo)
 	return true
 }
 
 func (c *Control) GetHostmap() *HostMap {
-	return c.f.hostMap
+	return c.F.hostMap
 }
 
 func (c *Control) GetCert() *cert.NebulaCertificate {
-	return c.f.pki.GetCertState().Certificate
+	return c.F.pki.GetCertState().Certificate
 }
 
 func (c *Control) ReHandshake(vpnIp netip.Addr) {
-	c.f.handshakeManager.StartHandshake(vpnIp, nil)
+	c.F.handshakeManager.StartHandshake(vpnIp, nil)
 }

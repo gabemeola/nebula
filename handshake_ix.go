@@ -211,8 +211,8 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 	ci.window.Update(f.l, 2)
 
 	ci.peerCert = remoteCert
-	ci.dKey = NewNebulaCipherState(dKey)
-	ci.eKey = NewNebulaCipherState(eKey)
+	ci.dKey = NewNebulaCipherState(dKey, ci.endian)
+	ci.eKey = NewNebulaCipherState(eKey, ci.endian)
 
 	hostinfo.remotes = f.lightHouse.QueryCache(vpnIp)
 	hostinfo.SetRemote(addr)
@@ -478,8 +478,8 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 
 	// Store their cert and our symmetric keys
 	ci.peerCert = remoteCert
-	ci.dKey = NewNebulaCipherState(dKey)
-	ci.eKey = NewNebulaCipherState(eKey)
+	ci.dKey = NewNebulaCipherState(dKey, ci.endian)
+	ci.eKey = NewNebulaCipherState(eKey, ci.endian)
 
 	// Make sure the current udpAddr being used is set for responding
 	if addr.IsValid() {

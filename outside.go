@@ -162,6 +162,17 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			return
 		}
 
+		// Roam to the new address before handling the request (like TestRequest
+		// below): the lighthouse replies to queries via hostinfo, so a client
+		// whose address just changed would otherwise get the reply at its old,
+		// possibly dead, address.
+		//
+		// Fork backport: remove when upgrading to nebula v1.11.0+. Upstream
+		// v1.11.0 restructured readOutsidePackets to roam before handling every
+		// packet type ("Roam before we respond"), which replaces this call.
+		// Regression test: priv/distro/harbor
+		// TestHarbor_ClientNATPortChange_LighthouseFollowsRoam.
+		f.handleHostRoaming(hostinfo, ip)
 		lhf(ip, hostinfo.vpnIp, d)
 
 		// Fallthrough to the bottom to record incoming traffic
