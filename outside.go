@@ -162,6 +162,17 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			return
 		}
 
+		// Roam to the new address before handling the request (like TestRequest
+		// below): the lighthouse replies to queries via hostinfo, so a client
+		// whose address just changed would otherwise get the reply at its old,
+		// possibly dead, address.
+		//
+		// Fork backport: remove when upgrading to nebula v1.11.0+. Upstream
+		// v1.11.0 restructured readOutsidePackets to roam before handling every
+		// packet type ("Roam before we respond"), which replaces this call.
+		// Regression test: priv/distro/harbor
+		// TestHarbor_ClientNATPortChange_LighthouseFollowsRoam.
+		f.handleHostRoaming(hostinfo, ip)
 		lhf(ip, hostinfo.vpnIp, d)
 
 		// Fallthrough to the bottom to record incoming traffic
@@ -287,15 +298,20 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, ip netip.AddrPort) {
 }
 
 func (f *Interface) handleEncrypted(ci *ConnectionState, addr netip.AddrPort, h *header.H) bool {
-	// If connectionstate exists and the replay protector allows, process packet
-	// Else, send recv errors for 300 seconds after a restart to allow fast reconnection.
-	if ci == nil || !ci.window.Check(f.l, h.MessageCounter) {
-		if addr.IsValid() {
+	// Only a missing connection should ask the peer to re-establish its tunnel.
+	if ci == nil {
+		// Our own pending handshake: the responder sends on the new tunnel
+		// as soon as it answers stage 1, so its traffic can beat stage 2
+		// here. A recv_error would make it close the tunnel we are about
+		// to complete.
+		if addr.IsValid() && f.handshakeManager.QueryIndex(h.RemoteIndex) == nil {
 			f.maybeSendRecvError(addr, h.RemoteIndex)
-			return false
-		} else {
-			return false
 		}
+		return false
+	}
+	// Retain anti-replay rejection without tearing down a healthy peer.
+	if !ci.window.Check(f.l, h.MessageCounter) {
+		return false
 	}
 
 	return true

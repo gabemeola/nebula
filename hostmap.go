@@ -556,6 +556,12 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	hm.Indexes[hostinfo.localIndexId] = hostinfo
 	hm.RemoteIndexes[hostinfo.remoteIndexId] = hostinfo
 
+	// Register while holding the hostmap write lock, before an outgoing
+	// lookup can see this host and set connectionManager.out first.
+	if f.connectionManager != nil {
+		f.connectionManager.AddTrafficWatch(hostinfo.localIndexId)
+	}
+
 	if hm.l.Level >= logrus.DebugLevel {
 		hm.l.WithField("hostMap", m{"vpnIp": hostinfo.vpnIp, "mapTotalSize": len(hm.Hosts),
 			"hostinfo": m{"existing": true, "localIndexId": hostinfo.localIndexId, "hostId": hostinfo.vpnIp}}).
@@ -641,6 +647,12 @@ func (i *HostInfo) GetCert() *cert.NebulaCertificate {
 		return i.ConnectionState.peerCert
 	}
 	return nil
+}
+
+// Remote returns the tunnel's current remote address. Used by priv-harbor to
+// tell apart tunnels on different lighthouses that use the same index.
+func (i *HostInfo) Remote() netip.AddrPort {
+	return i.remote
 }
 
 func (i *HostInfo) SetRemote(remote netip.AddrPort) {

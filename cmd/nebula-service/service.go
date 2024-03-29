@@ -34,7 +34,7 @@ func (p *program) Start(s service.Service) error {
 		return fmt.Errorf("failed to load config: %s", err)
 	}
 
-	p.control, err = nebula.Main(c, *p.configTest, Build, l, nil)
+	p.control, err = nebula.Main(c, *p.configTest, Build, l, nil, nil)
 	if err != nil {
 		return err
 	}

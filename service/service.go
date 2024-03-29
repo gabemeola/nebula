@@ -50,7 +50,7 @@ func New(config *config.C) (*Service, error) {
 	logger := logrus.New()
 	logger.Out = os.Stdout
 
-	control, err := nebula.Main(config, false, "custom-app", logger, overlay.NewUserDeviceFromConfig)
+	control, err := nebula.Main(config, false, "custom-app", logger, overlay.NewUserDeviceFromConfig, nil)
 	if err != nil {
 		return nil, err
 	}

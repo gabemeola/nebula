@@ -26,7 +26,7 @@ type controlHostLister interface {
 }
 
 type Control struct {
-	f               *Interface
+	F               *Interface
 	l               *logrus.Logger
 	ctx             context.Context
 	cancel          context.CancelFunc
@@ -51,7 +51,7 @@ type ControlHostInfo struct {
 // Start actually runs nebula, this is a nonblocking call. To block use Control.ShutdownBlock()
 func (c *Control) Start() {
 	// Activate the interface
-	c.f.activate()
+	c.F.activate()
 
 	// Call all the delayed funcs that waited patiently for the interface to be created.
 	if c.sshStart != nil {
@@ -68,7 +68,7 @@ func (c *Control) Start() {
 	}
 
 	// Start reading packets.
-	c.f.run()
+	c.F.run()
 }
 
 func (c *Control) Context() context.Context {
@@ -82,7 +82,7 @@ func (c *Control) Stop() {
 	c.cancel()
 
 	c.CloseAllTunnels(false)
-	if err := c.f.Close(); err != nil {
+	if err := c.F.Close(); err != nil {
 		c.l.WithError(err).Error("Close interface failed")
 	}
 	c.l.Info("Goodbye")
@@ -102,39 +102,39 @@ func (c *Control) ShutdownBlock() {
 
 // RebindUDPServer asks the UDP listener to rebind it's listener. Mainly used on mobile clients when interfaces change
 func (c *Control) RebindUDPServer() {
-	_ = c.f.outside.Rebind()
+	_ = c.F.outside.Rebind()
 
 	// Trigger a lighthouse update, useful for mobile clients that should have an update interval of 0
-	c.f.lightHouse.SendUpdate()
+	c.F.lightHouse.SendUpdate()
 
 	// Let the main interface know that we rebound so that underlying tunnels know to trigger punches from their remotes
-	c.f.rebindCount++
+	c.F.rebindCount++
 }
 
 // ListHostmapHosts returns details about the actual or pending (handshaking) hostmap by vpn ip
 func (c *Control) ListHostmapHosts(pendingMap bool) []ControlHostInfo {
 	if pendingMap {
-		return listHostMapHosts(c.f.handshakeManager)
+		return listHostMapHosts(c.F.handshakeManager)
 	} else {
-		return listHostMapHosts(c.f.hostMap)
+		return listHostMapHosts(c.F.hostMap)
 	}
 }
 
 // ListHostmapIndexes returns details about the actual or pending (handshaking) hostmap by local index id
 func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 	if pendingMap {
-		return listHostMapIndexes(c.f.handshakeManager)
+		return listHostMapIndexes(c.F.handshakeManager)
 	} else {
-		return listHostMapIndexes(c.f.hostMap)
+		return listHostMapIndexes(c.F.hostMap)
 	}
 }
 
 // GetCertByVpnIp returns the authenticated certificate of the given vpn IP, or nil if not found
 func (c *Control) GetCertByVpnIp(vpnIp netip.Addr) *cert.NebulaCertificate {
-	if c.f.myVpnNet.Addr() == vpnIp {
-		return c.f.pki.GetCertState().Certificate
+	if c.F.myVpnNet.Addr() == vpnIp {
+		return c.F.pki.GetCertState().Certificate
 	}
-	hi := c.f.hostMap.QueryVpnIp(vpnIp)
+	hi := c.F.hostMap.QueryVpnIp(vpnIp)
 	if hi == nil {
 		return nil
 	}
@@ -143,22 +143,22 @@ func (c *Control) GetCertByVpnIp(vpnIp netip.Addr) *cert.NebulaCertificate {
 
 // CreateTunnel creates a new tunnel to the given vpn ip.
 func (c *Control) CreateTunnel(vpnIp netip.Addr) {
-	c.f.handshakeManager.StartHandshake(vpnIp, nil)
+	c.F.handshakeManager.StartHandshake(vpnIp, nil)
 }
 
 // PrintTunnel creates a new tunnel to the given vpn ip.
 func (c *Control) PrintTunnel(vpnIp netip.Addr) *ControlHostInfo {
-	hi := c.f.hostMap.QueryVpnIp(vpnIp)
+	hi := c.F.hostMap.QueryVpnIp(vpnIp)
 	if hi == nil {
 		return nil
 	}
-	chi := copyHostInfo(hi, c.f.hostMap.GetPreferredRanges())
+	chi := copyHostInfo(hi, c.F.hostMap.GetPreferredRanges())
 	return &chi
 }
 
 // QueryLighthouse queries the lighthouse.
 func (c *Control) QueryLighthouse(vpnIp netip.Addr) *CacheMap {
-	hi := c.f.lightHouse.Query(vpnIp)
+	hi := c.F.lightHouse.Query(vpnIp)
 	if hi == nil {
 		return nil
 	}
@@ -170,9 +170,9 @@ func (c *Control) QueryLighthouse(vpnIp netip.Addr) *CacheMap {
 func (c *Control) GetHostInfoByVpnIp(vpnIp netip.Addr, pending bool) *ControlHostInfo {
 	var hl controlHostLister
 	if pending {
-		hl = c.f.handshakeManager
+		hl = c.F.handshakeManager
 	} else {
-		hl = c.f.hostMap
+		hl = c.F.hostMap
 	}
 
 	h := hl.QueryVpnIp(vpnIp)
@@ -180,33 +180,33 @@ func (c *Control) GetHostInfoByVpnIp(vpnIp netip.Addr, pending bool) *ControlHos
 		return nil
 	}
 
-	ch := copyHostInfo(h, c.f.hostMap.GetPreferredRanges())
+	ch := copyHostInfo(h, c.F.hostMap.GetPreferredRanges())
 	return &ch
 }
 
 // SetRemoteForTunnel forces a tunnel to use a specific remote
 // Caller should take care to Unmap() any 4in6 addresses prior to calling.
 func (c *Control) SetRemoteForTunnel(vpnIp netip.Addr, addr netip.AddrPort) *ControlHostInfo {
-	hostInfo := c.f.hostMap.QueryVpnIp(vpnIp)
+	hostInfo := c.F.hostMap.QueryVpnIp(vpnIp)
 	if hostInfo == nil {
 		return nil
 	}
 
 	hostInfo.SetRemote(addr)
-	ch := copyHostInfo(hostInfo, c.f.hostMap.GetPreferredRanges())
+	ch := copyHostInfo(hostInfo, c.F.hostMap.GetPreferredRanges())
 	return &ch
 }
 
 // CloseTunnel closes a fully established tunnel. If localOnly is false it will notify the remote end as well.
 // Caller should take care to Unmap() any 4in6 addresses prior to calling.
 func (c *Control) CloseTunnel(vpnIp netip.Addr, localOnly bool) bool {
-	hostInfo := c.f.hostMap.QueryVpnIp(vpnIp)
+	hostInfo := c.F.hostMap.QueryVpnIp(vpnIp)
 	if hostInfo == nil {
 		return false
 	}
 
 	if !localOnly {
-		c.f.send(
+		c.F.send(
 			header.CloseTunnel,
 			0,
 			hostInfo.ConnectionState,
@@ -217,7 +217,7 @@ func (c *Control) CloseTunnel(vpnIp netip.Addr, localOnly bool) bool {
 		)
 	}
 
-	c.f.closeTunnel(hostInfo)
+	c.F.closeTunnel(hostInfo)
 	return true
 }
 
@@ -225,7 +225,7 @@ func (c *Control) CloseTunnel(vpnIp netip.Addr, localOnly bool) bool {
 // the int returned is a count of tunnels closed
 func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	//TODO: this is probably better as a function in ConnectionManager or HostMap directly
-	lighthouses := c.f.lightHouse.GetLighthouses()
+	lighthouses := c.F.lightHouse.GetLighthouses()
 
 	shutdown := func(h *HostInfo) {
 		if excludeLighthouses {
@@ -233,8 +233,8 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 				return
 			}
 		}
-		c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
-		c.f.closeTunnel(h)
+		c.F.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+		c.F.closeTunnel(h)
 
 		c.l.WithField("vpnIp", h.vpnIp).WithField("udpAddr", h.remote).
 			Debug("Sending close tunnel message")
@@ -244,21 +244,21 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	// Learn which hosts are being used as relays, so we can shut them down last.
 	relayingHosts := map[netip.Addr]*HostInfo{}
 	// Grab the hostMap lock to access the Relays map
-	c.f.hostMap.Lock()
-	for _, relayingHost := range c.f.hostMap.Relays {
+	c.F.hostMap.Lock()
+	for _, relayingHost := range c.F.hostMap.Relays {
 		relayingHosts[relayingHost.vpnIp] = relayingHost
 	}
-	c.f.hostMap.Unlock()
+	c.F.hostMap.Unlock()
 
 	hostInfos := []*HostInfo{}
 	// Grab the hostMap lock to access the Hosts map
-	c.f.hostMap.Lock()
-	for _, relayHost := range c.f.hostMap.Indexes {
+	c.F.hostMap.Lock()
+	for _, relayHost := range c.F.hostMap.Indexes {
 		if _, ok := relayingHosts[relayHost.vpnIp]; !ok {
 			hostInfos = append(hostInfos, relayHost)
 		}
 	}
-	c.f.hostMap.Unlock()
+	c.F.hostMap.Unlock()
 
 	for _, h := range hostInfos {
 		shutdown(h)
@@ -270,7 +270,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 }
 
 func (c *Control) Device() overlay.Device {
-	return c.f.inside
+	return c.F.inside
 }
 
 func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {

@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"crypto/cipher"
-	"encoding/binary"
 	"errors"
 
 	"github.com/flynn/noise"
@@ -12,17 +11,15 @@ type endianness interface {
 	PutUint64(b []byte, v uint64)
 }
 
-var noiseEndianness endianness = binary.BigEndian
-
 type NebulaCipherState struct {
-	c noise.Cipher
+	c      noise.Cipher
+	endian endianness
 	//k [32]byte
 	//n uint64
 }
 
-func NewNebulaCipherState(s *noise.CipherState) *NebulaCipherState {
-	return &NebulaCipherState{c: s.Cipher()}
-
+func NewNebulaCipherState(s *noise.CipherState, endian endianness) *NebulaCipherState {
+	return &NebulaCipherState{c: s.Cipher(), endian: endian}
 }
 
 // EncryptDanger encrypts and authenticates a given payload.
@@ -45,7 +42,7 @@ func (s *NebulaCipherState) EncryptDanger(out, ad, plaintext []byte, n uint64, n
 		nb[1] = 0
 		nb[2] = 0
 		nb[3] = 0
-		noiseEndianness.PutUint64(nb[4:], n)
+		s.endian.PutUint64(nb[4:], n)
 		out = s.c.(cipher.AEAD).Seal(out, nb, plaintext, ad)
 		//l.Debugf("Encryption: outlen: %d, nonce: %d, ad: %s, plainlen %d", len(out), n, ad, len(plaintext))
 		return out, nil
@@ -60,7 +57,7 @@ func (s *NebulaCipherState) DecryptDanger(out, ad, ciphertext []byte, n uint64, 
 		nb[1] = 0
 		nb[2] = 0
 		nb[3] = 0
-		noiseEndianness.PutUint64(nb[4:], n)
+		s.endian.PutUint64(nb[4:], n)
 		return s.c.(cipher.AEAD).Open(out, nb, ciphertext, ad)
 	} else {
 		return []byte{}, nil

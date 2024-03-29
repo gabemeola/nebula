@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"net"
 	"net/netip"
@@ -19,7 +18,7 @@ import (
 
 type m map[string]interface{}
 
-func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
+func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, deviceFactory overlay.DeviceFactory, outsideConn udp.Conn) (retcon *Control, reterr error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Automatically cancel the context if Main returns an error, to signal all created goroutines to quit.
 	defer func() {
@@ -158,7 +157,9 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	udpConns := make([]udp.Conn, routines)
 	port := c.GetInt("listen.port", 0)
 
-	if !configTest {
+	if outsideConn != nil {
+		udpConns[0] = outsideConn
+	} else if !configTest {
 		rawListenHost := c.GetString("listen.host", "0.0.0.0")
 		var listenHost netip.Addr
 		if rawListenHost == "[::]" {
@@ -265,10 +266,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	switch ifConfig.Cipher {
-	case "aes":
-		noiseEndianness = binary.BigEndian
-	case "chachapoly":
-		noiseEndianness = binary.LittleEndian
+	case "aes", "chachapoly":
 	default:
 		return nil, fmt.Errorf("unknown cipher: %v", ifConfig.Cipher)
 	}
@@ -305,7 +303,9 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	//TODO: check if we _should_ be emitting stats
-	go ifce.emitStats(ctx, c.GetDuration("stats.interval", time.Second*10))
+	// Don't emit stats as `NewUDPStatsEmitter` in udp_linux.go panics
+	// if it has the wrong concrete type.
+	// go ifce.emitStats(ctx, c.GetDuration("stats.interval", time.Second*10))
 
 	attachCommands(l, c, ssh, ifce)
 

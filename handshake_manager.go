@@ -64,6 +64,11 @@ type HandshakeManager struct {
 	trigger chan netip.Addr
 }
 
+// Extensions
+func (s *HandshakeManager) LightHouse() *LightHouse {
+	return s.lightHouse
+}
+
 type HandshakeHostInfo struct {
 	sync.Mutex
 
@@ -568,7 +573,12 @@ func (c *HandshakeManager) DeleteHostInfo(hostinfo *HostInfo) {
 }
 
 func (c *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
-	delete(c.vpnIps, hostinfo.vpnIp)
+	// Fork backport of upstream #1811: only delete the pending handshake if
+	// it is this hostinfo. handleRecvError passes an established hostinfo,
+	// which used to drop a newer pending handshake to the same vpn ip.
+	if cur, ok := c.vpnIps[hostinfo.vpnIp]; ok && cur.hostinfo == hostinfo {
+		delete(c.vpnIps, hostinfo.vpnIp)
+	}
 	if len(c.vpnIps) == 0 {
 		c.vpnIps = map[netip.Addr]*HandshakeHostInfo{}
 	}

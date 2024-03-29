@@ -63,7 +63,21 @@ func (t *TestTun) Send(packet []byte) {
 	if t.l.Level >= logrus.DebugLevel {
 		t.l.WithField("dataLen", len(packet)).Debug("Tun receiving injected packet")
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			t.dropIfClosed(r)
+		}
+	}()
 	t.rxPackets <- packet
+}
+
+// dropIfClosed handles a panic recovered while sending a packet. Close can race
+// with a packet in flight (closed check, then Close, then the send); the packet
+// is dropped, like writing to a closed socket. Any other panic is re-raised.
+func (t *TestTun) dropIfClosed(r any) {
+	if !t.closed.Load() {
+		panic(r)
+	}
 }
 
 // Get will pull an unencrypted ip layer frame from the transmit queue
@@ -110,6 +124,12 @@ func (t *TestTun) Write(b []byte) (n int, err error) {
 
 	packet := make([]byte, len(b), len(b))
 	copy(packet, b)
+	defer func() {
+		if r := recover(); r != nil {
+			t.dropIfClosed(r)
+			n, err = 0, io.ErrClosedPipe
+		}
+	}()
 	t.TxPackets <- packet
 	return len(b), nil
 }

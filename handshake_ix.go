@@ -211,8 +211,8 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 	ci.window.Update(f.l, 2)
 
 	ci.peerCert = remoteCert
-	ci.dKey = NewNebulaCipherState(dKey)
-	ci.eKey = NewNebulaCipherState(eKey)
+	ci.dKey = NewNebulaCipherState(dKey, ci.endian)
+	ci.eKey = NewNebulaCipherState(eKey, ci.endian)
 
 	hostinfo.remotes = f.lightHouse.QueryCache(vpnIp)
 	hostinfo.SetRemote(addr)
@@ -334,8 +334,6 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 			Info("Handshake message sent")
 	}
-
-	f.connectionManager.AddTrafficWatch(hostinfo.localIndexId)
 
 	hostinfo.remotes.ResetBlockedRemotes()
 
@@ -478,8 +476,8 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 
 	// Store their cert and our symmetric keys
 	ci.peerCert = remoteCert
-	ci.dKey = NewNebulaCipherState(dKey)
-	ci.eKey = NewNebulaCipherState(eKey)
+	ci.dKey = NewNebulaCipherState(dKey, ci.endian)
+	ci.eKey = NewNebulaCipherState(eKey, ci.endian)
 
 	// Make sure the current udpAddr being used is set for responding
 	if addr.IsValid() {
@@ -493,7 +491,6 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 
 	// Complete our handshake and update metrics, this will replace any existing tunnels for this vpnIp
 	f.handshakeManager.Complete(hostinfo, f)
-	f.connectionManager.AddTrafficWatch(hostinfo.localIndexId)
 
 	if f.l.Level >= logrus.DebugLevel {
 		hostinfo.logger(f.l).Debugf("Sending %d stored packets", len(hh.packetStore))

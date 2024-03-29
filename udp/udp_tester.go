@@ -68,6 +68,13 @@ func (u *TesterConn) Send(packet *Packet) {
 			WithField("dataLen", len(packet.Data)).
 			Debug("UDP receiving injected packet")
 	}
+	defer func() {
+		// Close can race with a packet in flight (closed check above, then
+		// Close, then this send). Drop the packet, like a closed socket.
+		if r := recover(); r != nil && !u.closed.Load() {
+			panic(r)
+		}
+	}()
 	u.RxPackets <- packet
 }
 
@@ -91,7 +98,7 @@ func (u *TesterConn) Get(block bool) *Packet {
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
 
-func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
+func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) (err error) {
 	if u.closed.Load() {
 		return io.ErrClosedPipe
 	}
@@ -103,6 +110,15 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	}
 
 	copy(p.Data, b)
+	defer func() {
+		// See Send: Close can race with a packet in flight.
+		if r := recover(); r != nil {
+			if !u.closed.Load() {
+				panic(r)
+			}
+			err = io.ErrClosedPipe
+		}
+	}()
 	u.TxPackets <- p
 	return nil
 }

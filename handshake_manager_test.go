@@ -2,15 +2,99 @@ package nebula
 
 import (
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestHandshakeManager_TrafficWatchOnPublication(t *testing.T) {
+	for _, responder := range []bool{true, false} {
+		name := "initiator"
+		if responder {
+			name = "responder"
+		}
+		t.Run(name, func(t *testing.T) {
+			l := test.NewLogger()
+			hm := newHostMap(l, netip.MustParsePrefix("10.0.0.1/24"))
+			lh := newTestLighthouse()
+			handshakes := NewHandshakeManager(l, hm, lh, &udp.NoopConn{}, defaultHandshakeConfig)
+			f := &Interface{l: l, hostMap: hm, lightHouse: lh, handshakeManager: handshakes}
+			// Drive the real timer wheel explicitly, without a background ticker.
+			cm := &connectionManager{
+				l:                       l,
+				hostMap:                 hm,
+				intf:                    f,
+				in:                      make(map[uint32]struct{}),
+				inLock:                  &sync.RWMutex{},
+				out:                     make(map[uint32]struct{}),
+				outLock:                 &sync.RWMutex{},
+				relayUsedLock:           &sync.RWMutex{},
+				pendingDeletion:         make(map[uint32]struct{}),
+				punchy:                  NewPunchyFromConfig(l, config.NewC(l)),
+				trafficTimer:            NewLockingTimerWheel[uint32](500*time.Millisecond, 10*time.Second),
+				checkInterval:           5 * time.Second,
+				pendingDeletionInterval: 10 * time.Second,
+			}
+			f.connectionManager = cm
+			hi := &HostInfo{
+				vpnIp:           netip.MustParseAddr("10.0.0.2"),
+				localIndexId:    1234,
+				remoteIndexId:   5678,
+				ConnectionState: &ConnectionState{},
+				HandshakePacket: map[uint8][]byte{0: []byte("handshake")},
+			}
+			now := time.Now()
+			cm.trafficTimer.Advance(now)
+			if responder {
+				_, err := handshakes.CheckAndComplete(hi, 0, f)
+				require.NoError(t, err)
+			} else {
+				hh := &HandshakeHostInfo{hostinfo: hi}
+				handshakes.vpnIps[hi.vpnIp] = hh
+				handshakes.indexes[hi.localIndexId] = hh
+				handshakes.Complete(hi, f)
+			}
+			require.Same(t, hi, hm.QueryVpnIp(hi.vpnIp))
+			// Egress can run as soon as the hostmap lock is released. Previously
+			// this marker made the later AddTrafficWatch silently skip the timer.
+			cm.Out(hi.localIndexId)
+			if responder {
+				duplicate := &HostInfo{vpnIp: hi.vpnIp, localIndexId: 9999, HandshakePacket: hi.HandshakePacket}
+				_, err := handshakes.CheckAndComplete(duplicate, 0, f)
+				require.ErrorIs(t, err, ErrAlreadySeen)
+			}
+
+			now = now.Add(6 * time.Second)
+			cm.trafficTimer.Advance(now)
+			idx, ok := cm.trafficTimer.Purge()
+			require.True(t, ok, "published tunnel must have a health watch despite immediate outgoing traffic")
+			require.Equal(t, hi.localIndexId, idx)
+			_, extra := cm.trafficTimer.Purge()
+			require.False(t, extra, "publication and duplicate handshakes must not schedule extra watches")
+			decision, _, _ := cm.makeTrafficDecision(idx, now)
+			require.Equal(t, sendTestPacket, decision)
+
+			// An unanswered active test must eventually evict the dead primary,
+			// so future outgoing traffic can start a new handshake.
+			now = now.Add(11 * time.Second)
+			cm.trafficTimer.Advance(now)
+			idx, ok = cm.trafficTimer.Purge()
+			require.True(t, ok)
+			require.Equal(t, hi.localIndexId, idx)
+			cm.doTrafficCheck(idx, nil, nil, nil, now)
+			assert.Nil(t, hm.QueryVpnIp(hi.vpnIp))
+			assert.Nil(t, hm.QueryIndex(hi.localIndexId))
+		})
+	}
+}
 
 func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	l := test.NewLogger()
@@ -93,3 +177,23 @@ func (mw *mockEncWriter) SendMessageToHostInfo(t header.MessageType, st header.M
 }
 
 func (mw *mockEncWriter) Handshake(vpnIP netip.Addr) {}
+
+// Upstream #1811: deleting an established hostinfo (handleRecvError does)
+// must not drop a newer pending handshake to the same vpn ip.
+func TestHandshakeManager_DeleteHostInfoKeepsOtherPending(t *testing.T) {
+	l := test.NewLogger()
+	hm := newHostMap(l, netip.MustParsePrefix("10.0.0.1/24"))
+	handshakes := NewHandshakeManager(l, hm, newTestLighthouse(), &udp.NoopConn{}, defaultHandshakeConfig)
+	vpnIp := netip.MustParseAddr("10.0.0.2")
+	pending := &HandshakeHostInfo{hostinfo: &HostInfo{vpnIp: vpnIp, localIndexId: 1}}
+	handshakes.vpnIps[vpnIp] = pending
+	handshakes.indexes[1] = pending
+
+	handshakes.DeleteHostInfo(&HostInfo{vpnIp: vpnIp, localIndexId: 2})
+	assert.Same(t, pending.hostinfo, handshakes.QueryVpnIp(vpnIp))
+	assert.Same(t, pending.hostinfo, handshakes.QueryIndex(1))
+
+	handshakes.DeleteHostInfo(pending.hostinfo)
+	assert.Nil(t, handshakes.QueryVpnIp(vpnIp))
+	assert.Nil(t, handshakes.QueryIndex(1))
+}
