@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"runtime"
 	"syscall"
 	"unsafe"
 
@@ -22,10 +23,19 @@ import (
 //TODO: make it support reload as best you can!
 
 type StdConn struct {
-	sysFd int
-	isV4  bool
-	l     *logrus.Logger
-	batch int
+	sysFd     int
+	isV4      bool
+	l         *logrus.Logger
+	batch     int
+	sockaddr4 *unix.RawSockaddrInet4
+	sockaddr6 *unix.RawSockaddrInet6
+	useGSO    bool
+	useGRO    bool
+	// Pre-allocated structures for sendmsg
+	iov4 unix.Iovec
+	msg4 unix.Msghdr
+	iov6 unix.Iovec
+	msg6 unix.Msghdr
 }
 
 func maybeIPV4(ip net.IP) (net.IP, bool) {
@@ -59,6 +69,55 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		}
 	}
 
+	// Set larger buffer sizes for high throughput
+	// TODO: Experimental stuff
+	if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_SNDBUF, 16*1024*1024); err != nil {
+		l.WithError(err).Warn("Failed to set SO_SNDBUF")
+	}
+	if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, 16*1024*1024); err != nil {
+		l.WithError(err).Warn("Failed to set SO_RCVBUF")
+	}
+	// Verify the buffer sizes
+	if sbuf, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_SNDBUF); err == nil {
+		l.WithField("send_buffer_size", sbuf).Info("Socket send buffer size")
+	} else {
+		l.WithError(err).Warn("Failed to get SO_SNDBUF")
+	}
+	if rbuf, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF); err == nil {
+		l.WithField("recv_buffer_size", rbuf).Info("Socket receive buffer size")
+	} else {
+		l.WithError(err).Warn("Failed to get SO_RCVBUF")
+	}
+
+	// Try setting SO_INCOMING_CPU to distribute load
+	// TODO: Experimental stuff
+	for i := 0; i < runtime.NumCPU(); i++ {
+		if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU, i); err == nil {
+			if cpu, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU); err == nil {
+				l.WithField("cpu", cpu).Debug("Set SO_INCOMING_CPU")
+				break
+			}
+		}
+	}
+
+	useGSO := false
+	useGRO := false
+	// TODO: Set MTU from config
+	if err = unix.SetsockoptInt(fd, unix.SOL_UDP, unix.UDP_SEGMENT, 1300); err == nil {
+		useGSO = true
+		l.Info("UDP GSO enabled successfully")
+	} else {
+		l.WithError(err).Debug("UDP GSO not available, falling back to standard UDP")
+	}
+
+	// Try to enable UDP_GRO option
+	if err = unix.SetsockoptInt(fd, unix.SOL_UDP, unix.UDP_GRO, 1); err == nil {
+		useGRO = true
+		l.Info("UDP GRO enabled successfully")
+	} else {
+		l.WithError(err).Debug("UDP GRO not available, falling back to standard UDP receive")
+	}
+
 	//TODO: support multiple listening IPs (for limiting ipv6)
 	var sa unix.Sockaddr
 	if ip.Is4() {
@@ -79,7 +138,45 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 	//v, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU)
 	//l.Println(v, err)
 
-	return &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch}, err
+	var sockaddr4 = new(unix.RawSockaddrInet4)
+	sockaddr4.Family = unix.AF_INET
+	var sockaddr6 = new(unix.RawSockaddrInet6)
+	sockaddr6.Family = unix.AF_INET6
+
+	// Initialize the pre-allocated message structures
+	var (
+		iov4 unix.Iovec
+		msg4 unix.Msghdr
+		iov6 unix.Iovec
+		msg6 unix.Msghdr
+	)
+
+	// For IPv4
+	msg4.Name = (*byte)(unsafe.Pointer(sockaddr4))
+	msg4.Namelen = unix.SizeofSockaddrInet4
+	msg4.Iov = &iov4
+	msg4.Iovlen = 1
+
+	// For IPv6
+	msg6.Name = (*byte)(unsafe.Pointer(sockaddr6))
+	msg6.Namelen = unix.SizeofSockaddrInet6
+	msg6.Iov = &iov6
+	msg6.Iovlen = 1
+
+	return &StdConn{
+		sysFd:     fd,
+		isV4:      ip.Is4(),
+		l:         l,
+		batch:     batch,
+		sockaddr4: sockaddr4,
+		sockaddr6: sockaddr6,
+		useGSO:    useGSO,
+		useGRO:    useGRO,
+		iov4:      iov4,
+		msg4:      msg4,
+		iov6:      iov6,
+		msg6:      msg6,
+	}, err
 }
 
 func (u *StdConn) Rebind() error {
@@ -120,8 +217,16 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	}
 }
 
+const GRO_MTU = 65536
+
 func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
-	plaintext := make([]byte, MTU)
+	bufferSize := MTU
+	// If GRO is enabled, we need a larger buffer for potential coalesced packets
+	if u.useGRO {
+		bufferSize = GRO_MTU
+	}
+
+	plaintext := make([]byte, bufferSize)
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
 	var ip netip.Addr
@@ -143,16 +248,29 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 		}
 
 		//metric.Update(int64(n))
-		for i := 0; i < n; i++ {
+		for i := range n {
+			name := names[i]
+			// perf: early bounds check
+			_ = name[24:]
+
+			// Ensure we never access beyond the actual received data length
+			if msgs[i].Len > uint32(len(buffers[i])) {
+				u.l.WithFields(logrus.Fields{
+					"received_len": msgs[i].Len,
+					"buffer_size":  len(buffers[i]),
+				}).Error("Received message larger than buffer, truncating")
+				msgs[i].Len = uint32(len(buffers[i]))
+			}
+
 			if u.isV4 {
-				ip, _ = netip.AddrFromSlice(names[i][4:8])
+				ip, _ = netip.AddrFromSlice(name[4:8])
 				//TODO: IPV6-WORK what is not ok?
 			} else {
-				ip, _ = netip.AddrFromSlice(names[i][8:24])
+				ip, _ = netip.AddrFromSlice(name[8:24])
 				//TODO: IPV6-WORK what is not ok?
 			}
 			r(
-				netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])),
+				netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(name[2:4])),
 				plaintext[:0],
 				buffers[i][:msgs[i].Len],
 				h,
@@ -167,44 +285,60 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 }
 
 func (u *StdConn) ReadSingle(msgs []rawMessage) (int, error) {
-	for {
-		n, _, err := unix.Syscall6(
-			unix.SYS_RECVMSG,
-			uintptr(u.sysFd),
-			uintptr(unsafe.Pointer(&(msgs[0].Hdr))),
-			0,
-			0,
-			0,
-			0,
-		)
+	n, _, err := unix.Syscall6(
+		unix.SYS_RECVMSG,
+		uintptr(u.sysFd),
+		uintptr(unsafe.Pointer(&(msgs[0].Hdr))),
+		0,
+		0,
+		0,
+		0,
+	)
 
-		if err != 0 {
-			return 0, &net.OpError{Op: "recvmsg", Err: err}
-		}
-
-		msgs[0].Len = uint32(n)
-		return 1, nil
+	if err != 0 {
+		return 0, &net.OpError{Op: "recvmsg", Err: err}
 	}
+
+	msgs[0].Len = uint32(n)
+	return 1, nil
 }
 
 func (u *StdConn) ReadMulti(msgs []rawMessage) (int, error) {
-	for {
-		n, _, err := unix.Syscall6(
-			unix.SYS_RECVMMSG,
-			uintptr(u.sysFd),
-			uintptr(unsafe.Pointer(&msgs[0])),
-			uintptr(len(msgs)),
-			unix.MSG_WAITFORONE,
-			0,
-			0,
-		)
-
-		if err != 0 {
-			return 0, &net.OpError{Op: "recvmmsg", Err: err}
-		}
-
-		return int(n), nil
+	var flags uintptr = unix.MSG_WAITFORONE
+	// If GRO is enabled, we should be prepared for larger packets
+	if u.useGRO {
+		// MSG_TRUNC will let us know if the datagram was truncated
+		flags |= unix.MSG_TRUNC
 	}
+
+	n, _, err := unix.Syscall6(
+		unix.SYS_RECVMMSG,
+		uintptr(u.sysFd),
+		uintptr(unsafe.Pointer(&msgs[0])),
+		uintptr(len(msgs)),
+		flags,
+		0,
+		0,
+	)
+
+	if err != 0 {
+		return 0, &net.OpError{Op: "recvmmsg", Err: err}
+	}
+
+	// When using GRO, check if any packets were truncated
+	// if u.useGRO {
+	// 	for i := 0; i < int(n); i++ {
+	// 		// If message flags indicate truncation, log it
+	// 		if msgs[i].Flags&unix.MSG_TRUNC != 0 {
+	// 			u.l.WithFields(logrus.Fields{
+	// 				"received_size": msgs[i].Len,
+	// 				"buffer_size":   len(msgs[i].Buf),
+	// 			}).Warn("Received UDP packet was truncated, consider increasing buffer size")
+	// 		}
+	// 	}
+	// }
+
+	return int(n), nil
 }
 
 func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
@@ -215,30 +349,46 @@ func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
 }
 
 func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
-	var rsa unix.RawSockaddrInet6
-	rsa.Family = unix.AF_INET6
-	rsa.Addr = ip.Addr().As16()
-	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ip.Port())
+	u.sockaddr6.Addr = ip.Addr().As16()
+	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&u.sockaddr6.Port))[:], ip.Port())
 
-	for {
+	// Using GSO for large packets
+	if u.useGSO {
+		var iov unix.Iovec
+		iov.Base = &b[0]
+		iov.Len = uint64(len(b))
+
+		// var msg unix.Msghdr
+		// msg.Name = (*byte)(unsafe.Pointer(u.sockaddr6))
+		// msg.Namelen = unix.SizeofSockaddrInet6
+		// msg.Iov = &iov
+		// msg.Iovlen = 1
+		u.msg6.Iov = &iov
+
+		_, _, err := unix.Syscall(unix.SYS_SENDMSG, uintptr(u.sysFd), uintptr(unsafe.Pointer(&u.msg6)), 0)
+		if err != 0 {
+			return &net.OpError{Op: "sendmsg", Err: err}
+		}
+	} else {
+		// Standard path for normal sized packets
 		_, _, err := unix.Syscall6(
 			unix.SYS_SENDTO,
 			uintptr(u.sysFd),
 			uintptr(unsafe.Pointer(&b[0])),
 			uintptr(len(b)),
 			uintptr(0),
-			uintptr(unsafe.Pointer(&rsa)),
+			uintptr(unsafe.Pointer(u.sockaddr6)),
 			uintptr(unix.SizeofSockaddrInet6),
 		)
 
 		if err != 0 {
 			return &net.OpError{Op: "sendto", Err: err}
 		}
-
-		//TODO: handle incomplete writes
-
-		return nil
 	}
+
+	//TODO: handle incomplete writes
+
+	return nil
 }
 
 func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
@@ -246,30 +396,48 @@ func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
 		return fmt.Errorf("Listener is IPv4, but writing to IPv6 remote")
 	}
 
-	var rsa unix.RawSockaddrInet4
-	rsa.Family = unix.AF_INET
-	rsa.Addr = ip.Addr().As4()
-	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ip.Port())
+	u.sockaddr4.Addr = ip.Addr().As4()
+	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&u.sockaddr4.Port))[:], ip.Port())
 
-	for {
+	// GSO path - using sendmsg instead of sendto
+	if u.useGSO {
+		var iov unix.Iovec
+		iov.Base = &b[0]
+		iov.Len = uint64(len(b))
+
+		// var msg unix.Msghdr
+		// msg.Name = (*byte)(unsafe.Pointer(u.sockaddr4))
+		// msg.Namelen = unix.SizeofSockaddrInet4
+		// msg.Iov = &iov
+		// msg.Iovlen = 1
+
+		u.msg4.Iov = &iov
+
+		// Send with GSO
+		_, _, err := unix.Syscall(unix.SYS_SENDMSG, uintptr(u.sysFd), uintptr(unsafe.Pointer(&u.msg4)), uintptr(0))
+		if err != 0 {
+			return &net.OpError{Op: "sendmsg", Err: err}
+		}
+	} else {
+		// Original non-GSO path (unchanged)
 		_, _, err := unix.Syscall6(
 			unix.SYS_SENDTO,
 			uintptr(u.sysFd),
 			uintptr(unsafe.Pointer(&b[0])),
 			uintptr(len(b)),
 			uintptr(0),
-			uintptr(unsafe.Pointer(&rsa)),
+			uintptr(unsafe.Pointer(u.sockaddr4)),
 			uintptr(unix.SizeofSockaddrInet4),
 		)
 
 		if err != 0 {
 			return &net.OpError{Op: "sendto", Err: err}
 		}
-
-		//TODO: handle incomplete writes
-
-		return nil
 	}
+
+	//TODO: handle incomplete writes
+
+	return nil
 }
 
 func (u *StdConn) ReloadConfig(c *config.C) {

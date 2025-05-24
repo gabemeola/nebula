@@ -38,8 +38,14 @@ func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 	buffers := make([][]byte, n)
 	names := make([][]byte, n)
 
+	// Determine the appropriate buffer size based on whether GRO is enabled
+	bufferSize := MTU
+	if u.useGRO {
+		bufferSize = GRO_MTU
+	}
+
 	for i := range msgs {
-		buffers[i] = make([]byte, MTU)
+		buffers[i] = make([]byte, bufferSize)
 		names[i] = make([]byte, unix.SizeofSockaddrInet6)
 
 		//TODO: this is still silly, no need for an array
