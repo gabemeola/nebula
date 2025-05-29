@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net/netip"
 	"time"
 
@@ -22,7 +23,7 @@ const (
 )
 
 // TODO: IPV6-WORK this can likely be removed now
-func readOutsidePackets(f *Interface) udp.EncReader {
+func readOutsidePackets(f *Interface, reader io.ReadWriteCloser) udp.EncReader {
 	return func(
 		addr netip.AddrPort,
 		out []byte,
@@ -34,11 +35,11 @@ func readOutsidePackets(f *Interface) udp.EncReader {
 		q int,
 		localCache firewall.ConntrackCache,
 	) {
-		f.readOutsidePackets(addr, nil, out, packet, header, fwPacket, lhh, nb, q, localCache)
+		f.readOutsidePackets(addr, nil, out, packet, header, fwPacket, lhh, nb, q, localCache, reader)
 	}
 }
 
-func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache firewall.ConntrackCache, reader io.ReadWriteCloser) {
 	err := h.Parse(packet)
 	if err != nil {
 		// TODO: best if we return this and let caller log
@@ -82,7 +83,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 
 		switch h.Subtype {
 		case header.MessageNone:
-			if !f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache) {
+			if !f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache, reader) {
 				return
 			}
 		case header.MessageRelay:
@@ -117,7 +118,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			case TerminalType:
 				// If I am the target of this relay, process the unwrapped packet
 				// From this recursive point, all these variables are 'burned'. We shouldn't rely on them again.
-				f.readOutsidePackets(netip.AddrPort{}, &ViaSender{relayHI: hostinfo, remoteIdx: relay.RemoteIndex, relay: relay}, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
+				f.readOutsidePackets(netip.AddrPort{}, &ViaSender{relayHI: hostinfo, remoteIdx: relay.RemoteIndex, relay: relay}, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache, reader)
 				return
 			case ForwardingType:
 				// Find the target HostInfo relay object
@@ -303,6 +304,9 @@ func (f *Interface) handleEncrypted(ci *ConnectionState, addr netip.AddrPort, h 
 
 // newPacket validates and parses the interesting bits for the firewall out of the ip and sub protocol headers
 func newPacket(data []byte, incoming bool, fp *firewall.Packet) error {
+	// perf: Early bounds check
+	_ = data[20:]
+
 	// Do we at least have an ipv4 header worth of data?
 	if len(data) < ipv4.HeaderLen {
 		return fmt.Errorf("packet is less than %v bytes", ipv4.HeaderLen)
@@ -337,28 +341,55 @@ func newPacket(data []byte, incoming bool, fp *firewall.Packet) error {
 		return fmt.Errorf("packet is less than %v bytes, ip header len: %v", minLen, ihl)
 	}
 
+	// Read both IPs (src and dst) with a single 64-bit read
+	ipPair := binary.BigEndian.Uint64(data[12:20])
+	srcIP := uint32(ipPair >> 32)
+	dstIP := uint32(ipPair)
+	// Read both ports with a single 32-bit read
+	portPair := binary.BigEndian.Uint32(data[ihl : ihl+4])
+
 	// Firewall packets are locally oriented
 	if incoming {
 		//TODO: IPV6-WORK
-		fp.RemoteIP, _ = netip.AddrFromSlice(data[12:16])
-		fp.LocalIP, _ = netip.AddrFromSlice(data[16:20])
+		fp.RemoteIP = netip.AddrFrom4([4]byte{
+			byte(srcIP >> 24),
+			byte(srcIP >> 16),
+			byte(srcIP >> 8),
+			byte(srcIP),
+		})
+		fp.LocalIP = netip.AddrFrom4([4]byte{
+			byte(dstIP >> 24),
+			byte(dstIP >> 16),
+			byte(dstIP >> 8),
+			byte(dstIP),
+		})
 		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
 		} else {
-			fp.RemotePort = binary.BigEndian.Uint16(data[ihl : ihl+2])
-			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4])
+			fp.RemotePort = uint16(portPair >> 16)
+			fp.LocalPort = uint16(portPair)
 		}
 	} else {
 		//TODO: IPV6-WORK
-		fp.LocalIP, _ = netip.AddrFromSlice(data[12:16])
-		fp.RemoteIP, _ = netip.AddrFromSlice(data[16:20])
+		fp.LocalIP = netip.AddrFrom4([4]byte{
+			byte(srcIP >> 24),
+			byte(srcIP >> 16),
+			byte(srcIP >> 8),
+			byte(srcIP),
+		})
+		fp.RemoteIP = netip.AddrFrom4([4]byte{
+			byte(dstIP >> 24),
+			byte(dstIP >> 16),
+			byte(dstIP >> 8),
+			byte(dstIP),
+		})
 		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
 		} else {
-			fp.LocalPort = binary.BigEndian.Uint16(data[ihl : ihl+2])
-			fp.RemotePort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4])
+			fp.LocalPort = uint16(portPair >> 16)
+			fp.RemotePort = uint16(portPair)
 		}
 	}
 
@@ -381,8 +412,11 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	return out, nil
 }
 
-func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) bool {
+func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache, reader io.ReadWriteCloser) bool {
 	var err error
+
+	// Early bounds check
+	_ = packet[header.Len:]
 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], messageCounter, nb)
 	if err != nil {
@@ -399,6 +433,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return false
 	}
 
+	// TODO: This function has a lot of bounds checks
 	if !hostinfo.ConnectionState.window.Update(f.l, messageCounter) {
 		hostinfo.logger(f.l).WithField("fwPacket", fwPacket).
 			Debugln("dropping out of window packet")
@@ -419,7 +454,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	}
 
 	f.connectionManager.In(hostinfo.localIndexId)
-	_, err = f.readers[q].Write(out)
+	_, err = reader.Write(out)
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")
 	}

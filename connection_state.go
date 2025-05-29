@@ -15,8 +15,8 @@ import (
 const ReplayWindow = 1024
 
 type ConnectionState struct {
-	eKey           *NebulaCipherState
-	dKey           *NebulaCipherState
+	eKey           NebulaCipherState
+	dKey           NebulaCipherState
 	H              *noise.HandshakeState
 	myCert         *cert.NebulaCertificate
 	peerCert       *cert.NebulaCertificate

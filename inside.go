@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"io"
 	"net/netip"
 
 	"github.com/sirupsen/logrus"
@@ -8,9 +9,10 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/noiseutil"
+	"github.com/slackhq/nebula/udp"
 )
 
-func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache, reader io.ReadWriteCloser, writer udp.Conn) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
 		if f.l.Level >= logrus.DebugLevel {
@@ -21,7 +23,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	// Extension: Handle IP Alias Packets
 	if f.IPAlias != nil && f.IPAlias.OnPacket != nil && fwPacket.RemoteIP == f.IPAlias.Ip {
-		f.IPAlias.OnPacket(packet, f.readers[q])
+		f.IPAlias.OnPacket(packet, reader)
 		return
 	}
 	// Ignore local broadcast packets
@@ -35,7 +37,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		// routes packets from the Nebula IP to the Nebula IP through the Nebula
 		// TUN device.
 		if immediatelyForwardToSelf {
-			_, err := f.readers[q].Write(packet)
+			_, err := reader.Write(packet)
 			if err != nil {
 				f.l.WithError(err).Error("Failed to forward to tun")
 			}
@@ -55,7 +57,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	})
 
 	if hostinfo == nil {
-		f.rejectInside(packet, out, q)
+		f.rejectInside(packet, out, reader)
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("vpnIp", fwPacket.RemoteIP).
 				WithField("fwPacket", fwPacket).
@@ -70,10 +72,10 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendNoMetrics(header.Message, 0, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, packet, nb, out, q)
+		f.sendNoMetrics(header.Message, 0, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, packet, nb, out, q, writer)
 
 	} else {
-		f.rejectInside(packet, out, q)
+		f.rejectInside(packet, out, reader)
 		if f.l.Level >= logrus.DebugLevel {
 			hostinfo.logger(f.l).
 				WithField("fwPacket", fwPacket).
@@ -83,7 +85,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	}
 }
 
-func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
+func (f *Interface) rejectInside(packet []byte, out []byte, reader io.ReadWriteCloser) {
 	if !f.firewall.InSendReject {
 		return
 	}
@@ -93,7 +95,7 @@ func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
 		return
 	}
 
-	_, err := f.readers[q].Write(out)
+	_, err := reader.Write(out)
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")
 	}
@@ -119,7 +121,7 @@ func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *
 		return
 	}
 
-	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, packet, q)
+	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, packet, q, f.writers[q])
 }
 
 func (f *Interface) Handshake(vpnIp netip.Addr) {
@@ -158,7 +160,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 		return
 	}
 
-	f.sendNoMetrics(header.Message, st, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, p, nb, out, 0)
+	f.sendNoMetrics(header.Message, st, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, p, nb, out, 0, f.writers[0])
 }
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
@@ -188,12 +190,12 @@ func (f *Interface) SendMessageToHostInfo(t header.MessageType, st header.Messag
 
 func (f *Interface) send(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
-	f.sendNoMetrics(t, st, ci, hostinfo, netip.AddrPort{}, p, nb, out, 0)
+	f.sendNoMetrics(t, st, ci, hostinfo, netip.AddrPort{}, p, nb, out, 0, f.writers[0])
 }
 
 func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
-	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
+	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0, f.writers[0])
 }
 
 // SendVia sends a payload through a Relay tunnel. No authentication or encryption is done
@@ -261,11 +263,8 @@ func (f *Interface) SendVia(via *HostInfo,
 	f.connectionManager.RelayUsed(relay.LocalIndex)
 }
 
-func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, q int) {
-	if ci.eKey == nil {
-		//TODO: log warning
-		return
-	}
+// TODO: Beefy function that could be optimized
+func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, q int, writer udp.Conn) {
 	useRelay := !remote.IsValid() && !hostinfo.remote.IsValid()
 	fullOut := out
 
@@ -287,6 +286,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)
+	// TODO: This function has a lot of locks. Could slow down throughput.
 	f.connectionManager.Out(hostinfo.localIndexId)
 
 	// Query our LH if we haven't since the last time we've been rebound, this will cause the remote to punch against
@@ -315,13 +315,13 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	}
 
 	if remote.IsValid() {
-		err = f.writers[q].WriteTo(out, remote)
+		err = writer.WriteTo(out, remote)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).
 				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
 		}
 	} else if hostinfo.remote.IsValid() {
-		err = f.writers[q].WriteTo(out, hostinfo.remote)
+		err = writer.WriteTo(out, hostinfo.remote)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).
 				WithField("udpAddr", remote).Error("Failed to write outgoing packet")

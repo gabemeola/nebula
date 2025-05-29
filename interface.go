@@ -297,9 +297,10 @@ func (f *Interface) listenOut(i int) {
 		li = f.outside
 	}
 
+	reader := f.readers[i]
 	lhh := f.lightHouse.NewRequestHandler()
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
-	li.ListenOut(readOutsidePackets(f), lhHandleRequest(lhh, f), conntrackCache, i)
+	li.ListenOut(readOutsidePackets(f, reader), lhHandleRequest(lhh, f), conntrackCache, i)
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
@@ -311,6 +312,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	nb := make([]byte, 12, 12)
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
+	writer := f.writers[i]
 
 	for {
 		n, err := reader.Read(packet)
@@ -324,7 +326,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			os.Exit(2)
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
+		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l), reader, writer)
 	}
 }
 
