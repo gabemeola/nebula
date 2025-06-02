@@ -428,6 +428,27 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	 */
 	// if fwPacket.RemoteIP
 	f.l.Infof("[fwPacket] %+v", fwPacket)
+	// Extension: Packet Interceptor
+	if f.PacketInterceptor != nil {
+		shouldIntercept := f.PacketInterceptor.ShouldIntercept(fwPacket)
+		f.l.Infof("Intercepting Packet %v", shouldIntercept)
+		if shouldIntercept {
+			packetInfo := &PacketInfo{
+				hostinfo: hostinfo,
+				nb: nb,
+				originalPacket: packet,
+				q: q,
+			}
+			err := f.PacketInterceptor.HandlePacket(out, f, packetInfo)
+			if err != nil {
+				f.l.WithError(err).Error("error handling packet")
+				return false
+			}
+			return true
+		}
+	}
+
+	// TEST INTERCEPT
 	// f.l.Infof("[hostinfo] %+v", hostinfo)
 	if fwPacket.LocalPort == 80 && fwPacket.Protocol == firewall.ProtoTCP {
 		f.l.Info("Intercepting HTTP traffic")

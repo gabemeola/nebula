@@ -51,12 +51,6 @@ type InterfaceConfig struct {
 	l                     *logrus.Logger
 }
 
-// Extension: IP Alias routing
-type IPAlias struct {
-	Ip       netip.Addr
-	OnPacket func(packet []byte, writer io.Writer)
-}
-
 type Interface struct {
 	hostMap            *HostMap
 	outside            udp.Conn
@@ -100,12 +94,47 @@ type Interface struct {
 	l *logrus.Logger
 
 	// Extensions
-	IPAlias *IPAlias
+	IPAlias           *IPAlias
+	PacketInterceptor *PacketInterceptor
 }
 
 // Extensions
 func (s *Interface) HandshakeManager() *HandshakeManager {
 	return s.handshakeManager
+}
+
+// Extension: IP Alias routing
+type IPAlias struct {
+	Ip       netip.Addr
+	OnPacket func(packet []byte, writer io.Writer)
+}
+
+// Extension: Outside Packet Interceptor
+type PacketInterceptor struct {
+	ShouldIntercept func(fwPacket *firewall.Packet) bool
+	HandlePacket    func(out []byte, f *Interface, info *PacketInfo) error
+}
+
+type PacketInfo struct {
+	hostinfo       *HostInfo
+	nb             []byte
+	originalPacket []byte
+	q              int
+}
+
+func (s *Interface) SendPacket(packet []byte, info *PacketInfo) {
+	// Encrypt and send the response packet through Nebula
+	s.sendNoMetrics(
+		header.Message,
+		header.MessageNone,
+		info.hostinfo.ConnectionState,
+		info.hostinfo,
+		netip.AddrPort{}, // Remote address (Nebula will handle routing)
+		packet,
+		info.nb,
+		info.originalPacket,
+		info.q,
+	)
 }
 
 type EncWriter interface {

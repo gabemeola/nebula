@@ -20,7 +20,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	}
 
 	// Extension: Handle IP Alias Packets
-	if f.IPAlias != nil && f.IPAlias.OnPacket != nil && fwPacket.RemoteIP == f.IPAlias.Ip {
+	if f.IPAlias != nil && fwPacket.RemoteIP == f.IPAlias.Ip {
 		f.IPAlias.OnPacket(packet, f.readers[q])
 		return
 	}
