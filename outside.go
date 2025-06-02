@@ -418,6 +418,77 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return false
 	}
 
+	/**
+	 * TODO: Here is where you'll need to intercept for port 443 or 80,
+	 * then send a new packet back to the requester
+	 * via `view err = f.writers[q].WriteTo(out, remote)`
+	 * or `sendNoMetrics`
+	 *
+	 * Could probably parse fwPacket which seems to have the Target Port and can tell if it's TCP traffic.
+	 */
+	// if fwPacket.RemoteIP
+	f.l.Infof("[fwPacket] %+v", fwPacket)
+	// f.l.Infof("[hostinfo] %+v", hostinfo)
+	if fwPacket.LocalPort == 80 && fwPacket.Protocol == firewall.ProtoTCP {
+		f.l.Info("Intercepting HTTP traffic")
+		f.handleHTTPPacket(out, fwPacket, hostinfo, nb, packet, q)
+		return true
+
+		// Create IP + UDP packet
+		// ipHeader, err := ipv4.ParseHeader(out)
+		// if err != nil {
+		// 	f.l.WithError(err).Info("error parsing packet")
+		// 	return false
+		// }
+		// f.l.Infof("[ipHeader] %+v", ipHeader)
+		// f.l.Infof("packet len: %+v", len(out))
+
+		// // Extract TCP data (skip IP header)
+		// tcpData := out[ipHeader.Len:]
+		// f.l.Infof("tcpData len: %+v", len(tcpData))
+		// packet := gopacket.NewPacket(tcpData, layers.LayerTypeTCP, gopacket.Default)
+		// tcpLayer := packet.Layer(layers.LayerTypeTCP)
+		// if tcpLayer == nil {
+		// 	f.l.Error("no TCP layer found")
+		// 	return false
+		// }
+		// tcp := tcpLayer.(*layers.TCP)
+		// f.l.Infof("[tcp] %+v", tcp)
+
+		// // appLayer := packet.ApplicationLayer()
+		// // var payload []byte
+		// // if appLayer != nil {
+		// // 	payload = appLayer.Payload()
+		// // }
+		// tcpHeaderLen := tcp.DataOffset * 4
+		// payload := tcpData[tcpHeaderLen:]
+		// f.l.Infof("tcpHeaderLen: %+v", tcpHeaderLen)
+		// f.l.Infof("tcpData len: %+v", len(tcpData))
+		// f.l.Infof("payload len: %+v", len(payload))
+
+		// packetLn.HandlePacket(
+		// 	// TODO: Use fwpacket ips instead
+		// 	ipHeader.Src,
+		// 	ipHeader.Dst,
+		// 	fwPacket.LocalPort,
+		// 	fwPacket.RemotePort,
+		// 	tcpData,
+		// )
+
+		// f.sendNoMetrics(
+		// 	header.Message,
+		// 	header.MessageNone,
+		// 	hostinfo.ConnectionState,
+		// 	hostinfo,
+		// 	netip.AddrPort{},
+		// 	out,
+		// 	nb,
+		// 	packet,
+		// 	q,
+		// )
+		// return true
+	}
+
 	f.connectionManager.In(hostinfo.localIndexId)
 	_, err = f.readers[q].Write(out)
 	if err != nil {
