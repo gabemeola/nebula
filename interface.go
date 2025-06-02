@@ -112,7 +112,7 @@ type IPAlias struct {
 // Extension: Outside Packet Interceptor
 type PacketInterceptor struct {
 	ShouldIntercept func(fwPacket *firewall.Packet) bool
-	HandlePacket    func(out []byte, f *Interface, info *PacketInfo) error
+	HandlePacket    func(out []byte, info *PacketInfo) error
 }
 
 type PacketInfo struct {

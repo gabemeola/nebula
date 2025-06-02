@@ -439,7 +439,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 				originalPacket: packet,
 				q: q,
 			}
-			err := f.PacketInterceptor.HandlePacket(out, f, packetInfo)
+			err := f.PacketInterceptor.HandlePacket(out, packetInfo)
 			if err != nil {
 				f.l.WithError(err).Error("error handling packet")
 				return false
