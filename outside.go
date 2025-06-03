@@ -418,26 +418,15 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return false
 	}
 
-	/**
-	 * TODO: Here is where you'll need to intercept for port 443 or 80,
-	 * then send a new packet back to the requester
-	 * via `view err = f.writers[q].WriteTo(out, remote)`
-	 * or `sendNoMetrics`
-	 *
-	 * Could probably parse fwPacket which seems to have the Target Port and can tell if it's TCP traffic.
-	 */
-	// if fwPacket.RemoteIP
-	// f.l.Infof("[fwPacket] %+v", fwPacket)
 	// Extension: Packet Interceptor
 	if f.PacketInterceptor != nil {
 		shouldIntercept := f.PacketInterceptor.ShouldIntercept(fwPacket)
-		// f.l.Infof("Intercepting Packet %v", shouldIntercept)
 		if shouldIntercept {
 			packetInfo := &PacketInfo{
-				hostinfo: hostinfo,
-				nb: nb,
+				hostinfo:       hostinfo,
+				nb:             nb,
 				originalPacket: packet,
-				q: q,
+				q:              q,
 			}
 			err := f.PacketInterceptor.HandlePacket(out, packetInfo)
 			if err != nil {
