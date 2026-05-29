@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ const ReplayWindow = 1024
 type ConnectionState struct {
 	eKey           *NebulaCipherState
 	dKey           *NebulaCipherState
+	endian         endianness
 	H              *noise.HandshakeState
 	myCert         *cert.NebulaCertificate
 	peerCert       *cert.NebulaCertificate
@@ -43,10 +45,13 @@ func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, i
 	}
 
 	var cs noise.CipherSuite
+	var endian endianness
 	if cipher == "chachapoly" {
 		cs = noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, noise.HashSHA256)
+		endian = binary.LittleEndian
 	} else {
 		cs = noise.NewCipherSuite(dhFunc, noiseutil.CipherAESGCM, noise.HashSHA256)
+		endian = binary.BigEndian
 	}
 
 	static := noise.DHKey{Private: certState.PrivateKey, Public: certState.PublicKey}
@@ -75,6 +80,7 @@ func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, i
 		initiator: initiator,
 		window:    b,
 		myCert:    certState.Certificate,
+		endian:    endian,
 	}
 	// always start the counter from 2, as packet 1 and packet 2 are handshake packets.
 	ci.messageCounter.Add(2)
